@@ -1,12 +1,12 @@
 """
 StatusKit Video Processing Server
-==================================
-Runs FFmpeg with libx264 on the server side — exactly like Pure Status.
+Uses static FFmpeg binary with libx264 — same as Pure Status
 """
 
 import os
 import uuid
 import asyncio
+import subprocess
 from pathlib import Path
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks
@@ -36,18 +36,23 @@ def root():
 
 @app.get("/health")
 def health_check():
-    import subprocess
     try:
         result = subprocess.run(
             ["ffmpeg", "-encoders"],
-            capture_output=True, text=True, timeout=10
+            capture_output=True, text=True, timeout=15
         )
         output = result.stdout + result.stderr
         has_x264 = "libx264" in output
+        ver = subprocess.run(
+            ["ffmpeg", "-version"],
+            capture_output=True, text=True, timeout=10
+        )
+        version = ver.stdout.split('\n')[0] if ver.stdout else "unknown"
         return {
             "status": "ok",
             "ffmpeg": "available",
-            "libx264": has_x264
+            "libx264": has_x264,
+            "version": version
         }
     except Exception as e:
         return {"status": "error", "ffmpeg": str(e), "libx264": False}
@@ -66,9 +71,8 @@ async def compress_video(
     try:
         content = await file.read()
         input_path.write_bytes(content)
-
-        file_size_mb = len(content) / (1024 * 1024)
-        print(f"[{job_id}] Received: {file.filename} ({file_size_mb:.1f} MB)")
+        size_mb = len(content) / (1024 * 1024)
+        print(f"[{job_id}] Received: {file.filename} ({size_mb:.1f} MB)")
 
         vf = (
             "scale=-2:'min(1080,ih)',"
@@ -110,7 +114,6 @@ async def compress_video(
         ]
 
         print(f"[{job_id}] Running FFmpeg with libx264...")
-
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -126,8 +129,8 @@ async def compress_video(
                 detail=f"Processing failed: {error_msg}"
             )
 
-        output_size_mb = output_path.stat().st_size / (1024 * 1024)
-        print(f"[{job_id}] Done: {output_size_mb:.1f} MB")
+        out_mb = output_path.stat().st_size / (1024 * 1024)
+        print(f"[{job_id}] Done: {out_mb:.1f} MB")
 
         background_tasks.add_task(
             cleanup_files, str(input_path), str(output_path)
@@ -144,7 +147,6 @@ async def compress_video(
         raise
     except Exception as e:
         cleanup_files(str(input_path), str(output_path))
-        print(f"[{job_id}] Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

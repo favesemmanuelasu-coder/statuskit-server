@@ -1,71 +1,27 @@
-# Build FFmpeg with libx264 from source — guarantees libx264 support
+# mwader/static-ffmpeg contains a fully static FFmpeg binary
+# compiled with ALL codecs including libx264, libx265, libvpx etc.
+# No dependency issues, works on any Linux environment.
 FROM python:3.11-slim
 
-ENV DEBIAN_FRONTEND=noninteractive
+# Copy static FFmpeg binary (includes libx264 compiled in)
+COPY --from=mwader/static-ffmpeg:latest /ffmpeg /usr/local/bin/ffmpeg
+COPY --from=mwader/static-ffmpeg:latest /ffprobe /usr/local/bin/ffprobe
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    git \
-    pkg-config \
-    yasm \
-    nasm \
-    wget \
-    curl \
-    libssl-dev \
-    zlib1g-dev \
-    && rm -rf /var/lib/apt/lists/*
+# Make executable
+RUN chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe
 
-# Build x264 from source
-RUN git clone --depth 1 https://code.videolan.org/videolan/x264.git /tmp/x264 && \
-    cd /tmp/x264 && \
-    ./configure --prefix=/usr/local --enable-static --enable-shared --disable-cli && \
-    make -j$(nproc) && \
-    make install && \
-    ldconfig && \
-    rm -rf /tmp/x264
+# Verify libx264 is included
+RUN ffmpeg -encoders 2>&1 | grep libx264 && echo "libx264 OK" || (echo "libx264 MISSING" && exit 1)
 
-# Build FFmpeg with libx264
-RUN wget -q https://ffmpeg.org/releases/ffmpeg-6.0.tar.bz2 -O /tmp/ffmpeg.tar.bz2 && \
-    tar -xf /tmp/ffmpeg.tar.bz2 -C /tmp && \
-    cd /tmp/ffmpeg-6.0 && \
-    ./configure \
-        --prefix=/usr/local \
-        --enable-gpl \
-        --enable-libx264 \
-        --enable-nonfree \
-        --enable-openssl \
-        --disable-debug \
-        --disable-doc \
-        --disable-ffplay \
-        --disable-filters \
-        --enable-filter=scale \
-        --enable-filter=drawtext \
-        --enable-filter=setsar \
-        --enable-filter=format \
-        --enable-filter=aresample \
-        --enable-filter=volume \
-        --disable-programs \
-        --enable-ffmpeg \
-        --enable-ffprobe \
-    && make -j$(nproc) && \
-    make install && \
-    ldconfig && \
-    rm -rf /tmp/ffmpeg* && \
-    rm -rf /tmp/ffmpeg-6.0
-
-# Verify libx264 works
-RUN ffmpeg -encoders 2>&1 | grep libx264 && echo "libx264 OK"
-
-# Install Python dependencies
+# Install Python packages
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy server code
+# Copy server
 COPY main.py .
 
-# Create temp directories
+# Temp dirs
 RUN mkdir -p /tmp/statuskit/uploads /tmp/statuskit/outputs
 
 EXPOSE 8000
