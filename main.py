@@ -1,6 +1,6 @@
 """
 StatusKit Video Processing Server
-Uses static FFmpeg binary with libx264 — same as Pure Status
+Uses static FFmpeg binary with libx264 + fonts for watermark
 """
 
 import os
@@ -19,6 +19,37 @@ UPLOAD_DIR = Path("/tmp/statuskit/uploads")
 OUTPUT_DIR = Path("/tmp/statuskit/outputs")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# Find available font on startup
+def find_font():
+    """Find a font file available on this system."""
+    candidates = [
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+    ]
+    for font in candidates:
+        if Path(font).exists():
+            print(f"Using font: {font}")
+            return font
+    # Try fc-list as fallback
+    try:
+        result = subprocess.run(
+            ["fc-list", ":spacing=proportional", "--format=%{file}\n"],
+            capture_output=True, text=True, timeout=5
+        )
+        fonts = [f.strip() for f in result.stdout.split('\n') if f.strip().endswith('.ttf')]
+        if fonts:
+            print(f"Using font from fc-list: {fonts[0]}")
+            return fonts[0]
+    except Exception:
+        pass
+    print("WARNING: No font found, watermark will be disabled")
+    return None
+
+FONT_PATH = find_font()
 
 
 def cleanup_files(*paths):
@@ -52,7 +83,8 @@ def health_check():
             "status": "ok",
             "ffmpeg": "available",
             "libx264": has_x264,
-            "version": version
+            "version": version,
+            "font": FONT_PATH or "not found"
         }
     except Exception as e:
         return {"status": "error", "ffmpeg": str(e), "libx264": False}
@@ -74,20 +106,26 @@ async def compress_video(
         size_mb = len(content) / (1024 * 1024)
         print(f"[{job_id}] Received: {file.filename} ({size_mb:.1f} MB)")
 
-        vf = (
-            "scale=-2:'min(1080,ih)',"
-            "setsar=1,"
-            "format=yuv420p,"
-            "drawtext=text='StatusKit':"
-            "font=sans:"
-            "fontsize=36:"
-            "fontcolor=white:"
-            "borderw=2:"
-            "bordercolor=black:"
-            "alpha=0.75:"
-            "x=w-tw-20:"
-            "y=h-th-20"
-        )
+        # Build video filter chain
+        # Use explicit font path if available, otherwise skip watermark
+        if FONT_PATH:
+            vf = (
+                "scale=-2:'min(1080,ih)',"
+                "setsar=1,"
+                "format=yuv420p,"
+                f"drawtext=text='StatusKit':"
+                f"fontfile='{FONT_PATH}':"
+                "fontsize=36:"
+                "fontcolor=white:"
+                "borderw=2:"
+                "bordercolor=black:"
+                "alpha=0.75:"
+                "x=w-tw-20:"
+                "y=h-th-20"
+            )
+        else:
+            # No watermark if no font available
+            vf = "scale=-2:'min(1080,ih)',setsar=1,format=yuv420p"
 
         cmd = [
             "ffmpeg",
@@ -113,7 +151,7 @@ async def compress_video(
             str(output_path),
         ]
 
-        print(f"[{job_id}] Running FFmpeg with libx264...")
+        print(f"[{job_id}] Running FFmpeg...")
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -122,7 +160,7 @@ async def compress_video(
         stdout, stderr = await process.communicate()
 
         if process.returncode != 0:
-            error_msg = stderr.decode()[-2000:]
+            error_msg = stderr.decode()[-3000:]
             print(f"[{job_id}] FFmpeg failed: {error_msg}")
             raise HTTPException(
                 status_code=500,
@@ -147,6 +185,7 @@ async def compress_video(
         raise
     except Exception as e:
         cleanup_files(str(input_path), str(output_path))
+        print(f"[{job_id}] Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

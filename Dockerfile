@@ -1,27 +1,29 @@
-# mwader/static-ffmpeg contains a fully static FFmpeg binary
-# compiled with ALL codecs including libx264, libx265, libvpx etc.
-# No dependency issues, works on any Linux environment.
 FROM python:3.11-slim
 
-# Copy static FFmpeg binary (includes libx264 compiled in)
+# Copy static FFmpeg binary (includes libx264)
 COPY --from=mwader/static-ffmpeg:latest /ffmpeg /usr/local/bin/ffmpeg
 COPY --from=mwader/static-ffmpeg:latest /ffprobe /usr/local/bin/ffprobe
 
-# Make executable
 RUN chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe
 
-# Verify libx264 is included
-RUN ffmpeg -encoders 2>&1 | grep libx264 && echo "libx264 OK" || (echo "libx264 MISSING" && exit 1)
+# Install fonts for FFmpeg drawtext watermark
+RUN apt-get update && apt-get install -y \
+    fontconfig \
+    fonts-dejavu-core \
+    fonts-liberation \
+    && fc-cache -fv \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install Python packages
+# Verify libx264 and fonts
+RUN ffmpeg -encoders 2>&1 | grep libx264 && echo "libx264 OK"
+RUN fc-list | head -5 && echo "Fonts OK"
+
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy server
 COPY main.py .
 
-# Temp dirs
 RUN mkdir -p /tmp/statuskit/uploads /tmp/statuskit/outputs
 
 EXPOSE 8000
